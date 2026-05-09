@@ -55,7 +55,38 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y zip curl jq python3 ffmpeg
+          sudo apt-get install -y zip curl jq python3 ffmpeg tor
+
+      - name: Setup Tor proxy
+        id: setup-tor
+        run: |
+          sudo systemctl restart tor
+
+          echo "Waiting for Tor to bootstrap..."
+          sleep 10
+
+          # Test Tor connection
+          MAX_RETRIES=30
+          RETRY_COUNT=0
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if sudo systemctl is-active --quiet tor; then
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                TOR_IP=$(curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null | grep -o '"IP":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+                echo "✅ Tor is running and accessible via proxy (IP: $TOR_IP)"
+                echo "TOR_PROXY=socks5://127.0.0.1:9050" >> $GITHUB_ENV
+                break
+              fi
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Waiting for Tor to be ready... ($RETRY_COUNT/$MAX_RETRIES)"
+            sleep 5
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "⚠️ Tor failed to bootstrap within timeout, continuing without proxy..."
+            echo "TOR_PROXY=" >> $GITHUB_ENV
+          fi
 
       - name: Retrieve media file
         id: retrieval
@@ -68,41 +99,47 @@ jobs:
           FMT="${{ github.event.inputs.output_format == 'mp3 (audio only)' && 'mp3' || 'mp4' }}"
           QUAL="${{ github.event.inputs.desired_quality }}"
           OUT_DIR="${{ github.event.inputs.output_folder }}"
-          
-          # Normalise quality string
-          if [ "$FMT" = "mp3" ]; then
-            case "$QUAL" in
-              64kbps) BITRATE="64K" ;;
-              128kbps) BITRATE="128K" ;;
-              192kbps) BITRATE="192K" ;;
-              320kbps) BITRATE="320K" ;;
-              *) BITRATE="192K" ;;
-            esac
-            
-            # Download as MP3
-            yt-dlp \
-              -x \
-              --audio-format mp3 \
-              --audio-quality "$BITRATE" \
-              -o "$OUT_DIR/%(title)s_%(id)s_${QUAL}.%(ext)s" \
-              "$URL"
-          else
-            case "$QUAL" in
-              144p) RES="144" ;;
-              360p) RES="360" ;;
-              480p) RES="480" ;;
-              720p) RES="720" ;;
-              1080p) RES="1080" ;;
-              *) RES="720" ;;
-            esac
-            
-            # Download as MP4 with specific quality
-            yt-dlp \
-              -f "bestvideo[height<=$RES]+bestaudio/best[height<=$RES]" \
-              --merge-output-format mp4 \
-              -o "$OUT_DIR/%(title)s_%(id)s_${QUAL}.%(ext)s" \
-              "$URL"
-          fi
+
+          for i in {1..10}; do
+            # Normalise quality string
+            TOR_USER=$(openssl rand -hex 8)
+            TOR_PASS=$(openssl rand -hex 16)
+            if [ "$FMT" = "mp3" ]; then
+              case "$QUAL" in
+                64kbps) BITRATE="64K" ;;
+                128kbps) BITRATE="128K" ;;
+                192kbps) BITRATE="192K" ;;
+                320kbps) BITRATE="320K" ;;
+                *) BITRATE="192K" ;;
+              esac
+              
+              # Download as MP3
+              yt-dlp \
+                -x \
+                --proxy "socks5://${TOR_USER}:${TOR_PASS}@127.0.0.1:9050" \
+                --audio-format mp3 \
+                --audio-quality "$BITRATE" \
+                -o "$OUT_DIR/%(title)s_%(id)s_${QUAL}.%(ext)s" \
+                "$URL"
+            else
+              case "$QUAL" in
+                144p) RES="144" ;;
+                360p) RES="360" ;;
+                480p) RES="480" ;;
+                720p) RES="720" ;;
+                1080p) RES="1080" ;;
+                *) RES="720" ;;
+              esac
+              
+              # Download as MP4 with specific quality
+              yt-dlp \
+                --proxy "socks5://${TOR_USER}:${TOR_PASS}@127.0.0.1:9050" \
+                -f "bestvideo[height<=$RES]+bestaudio/best[height<=$RES]" \
+                --merge-output-format mp4 \
+                -o "$OUT_DIR/%(title)s_%(id)s_${QUAL}.%(ext)s" \
+                "$URL"
+            fi
+          done
           
           # Get the actual filename that was downloaded
           cd "$OUT_DIR"
