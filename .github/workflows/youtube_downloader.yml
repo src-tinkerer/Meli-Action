@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: 'downloads'
+      compressed_splits:
+        description: 'Make compressed splits or just split into different videos'
+        required: false
+        type: number
+        default: 1
 
 permissions:
   contents: write
@@ -50,7 +55,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y zip curl jq python3
+          sudo apt-get install -y zip curl jq python3 ffmpeg
 
       - name: Retrieve media file
         id: retrieval
@@ -140,13 +145,19 @@ jobs:
         run: |
           OUTPUT_FOLDER="${{ github.event.inputs.output_folder }}"
           THRESH_MB=${{ github.event.inputs.max_part_mb }}
+          COMPRESS=${{ github.event.inputs.compressed_splits }}
           THRESH_BYTES=$((THRESH_MB * 1024 * 1024))
+          wget https://raw.githubusercontent.com/c0decracker/video-splitter/refs/heads/master/ffmpeg-split.py
           cd "$OUTPUT_FOLDER/parts"
           for f in *; do
             if [ -f "$f" ]; then
               fs=$(stat -c%s "$f")
               if [ "$THRESH_BYTES" -gt 0 ] && [ "$fs" -gt "$THRESH_BYTES" ]; then
-                zip -r -s "${THRESH_MB}m" "../${f}.zip" "$f"
+                if [ "$COMPRESS" -gt 0 ]; then
+                  zip -r -s "${THRESH_MB}m" "../${f}.zip" "$f"
+                else
+                  python3 ../../ffmpeg-split.py -f "$f" -S "${THRESH_BYTES}" -o ".."
+                fi
                 rm "$f"
               else
                 mv "$f" ..
