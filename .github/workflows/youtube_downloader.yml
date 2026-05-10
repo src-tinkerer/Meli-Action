@@ -156,7 +156,7 @@ jobs:
                 if [ "$COMPRESS" -gt 0 ]; then
                   zip -r -s "${THRESH_MB}m" "../${f}.zip" "$f"
                 else
-                  python3 ../../ffmpeg-split.py -f "$f" -S "${THRESH_BYTES}" -o ".."
+                  python3 ../../ffmpeg-split.py -f "$f" -S "${THRESH_BYTES}" --chunk-strategy even -o ".."
                 fi
                 rm "$f"
               else
